@@ -1,136 +1,83 @@
 ﻿using Microsoft.EntityFrameworkCore;
 using System;
 using System.Collections.Generic;
-using System.Data.Entity;
 using System.Linq;
+using System.Linq.Expressions;
 using System.Text;
 using UnitOfWorkPattern.DAL.Abstracts;
 using UnitOfWorkPattern.DAL.Models;
 
 namespace UnitOfWorkPattern.DAL
 {
-    public class GenericRepository<T> : IGenericRepository<T>, IDisposable where T : class
+    public class GenericRepository<TEntity> where TEntity : class
     {
-        private IDbSet<T> _entities;
-        private string _errorMessage = string.Empty;
-        private bool _isDisposed;
-        public GenericRepository(IUnitOfWork<EmployeeDBContext> unitOfWork)
-            : this(unitOfWork.Context)
-        {
-        }
+        internal EmployeeDBContext context;
+        internal Microsoft.EntityFrameworkCore.DbSet<TEntity> dbSet;
+
         public GenericRepository(EmployeeDBContext context)
         {
-            _isDisposed = false;
-            Context = context;
+            this.context = context;
+            this.dbSet = context.Set<TEntity>();
         }
-        public EmployeeDBContext Context { get; set; }
-        public virtual IQueryable<T> Table
+
+        public virtual IEnumerable<TEntity> Get(
+            Expression<Func<TEntity, bool>> filter = null,
+            Func<IQueryable<TEntity>, IOrderedQueryable<TEntity>> orderBy = null,
+            string includeProperties = "")
         {
-            get { return Entities; }
-        }
-        protected virtual IDbSet<T> Entities
-        {
-            get { return _entities ?? (_entities = Context.Set<T>()); }
-        }
-        public void Dispose()
-        {
-            if (Context != null)
-                Context.Dispose();
-            _isDisposed = true;
-        }
-        public virtual IEnumerable<T> GetAll()
-        {
-            return Entities.ToList();
-        }
-        public virtual T GetById(object id)
-        {
-            return Entities.Find(id);
-        }
-        public virtual void Insert(T entity)
-        {
-            try
+            IQueryable<TEntity> query = dbSet;
+
+            if (filter != null)
             {
-                if (entity == null)
-                    throw new ArgumentNullException("entity");
-                Entities.Add(entity);
-                if (Context == null || _isDisposed)
-                    Context = new EmployeeDBContext();
-                //Context.SaveChanges(); commented out call to SaveChanges as Context save changes will be 
-                //called with Unit of work
+                query = query.Where(filter);
             }
-            catch (DbEntityValidationException dbEx)
+
+            foreach (var includeProperty in includeProperties.Split
+                (new char[] { ',' }, StringSplitOptions.RemoveEmptyEntries))
             {
-                foreach (var validationErrors in dbEx.EntityValidationErrors)
-                    foreach (var validationError in validationErrors.ValidationErrors)
-                        _errorMessage += string.Format("Property: {0} Error: {1}", validationError.PropertyName, validationError.ErrorMessage) + Environment.NewLine;
-                throw new Exception(_errorMessage, dbEx);
+                query = query.Include(includeProperty);
+            }
+
+            if (orderBy != null)
+            {
+                return orderBy(query).ToList();
+            }
+            else
+            {
+                return query.ToList();
             }
         }
-        public void BulkInsert(IEnumerable<T> entities)
+
+        public virtual TEntity GetByID(object id)
         {
-            try
-            {
-                if (entities == null)
-                {
-                    throw new ArgumentNullException("entities");
-                }
-                Context.Configuration.AutoDetectChangesEnabled = false;
-                Context.Set<T>().AddRange(entities);
-                Context.SaveChanges();
-            }
-            catch (DbEntityValidationException dbEx)
-            {
-                foreach (var validationErrors in dbEx.EntityValidationErrors)
-                {
-                    foreach (var validationError in validationErrors.ValidationErrors)
-                    {
-                        _errorMessage += string.Format("Property: {0} Error: {1}", validationError.PropertyName,
-                                             validationError.ErrorMessage) + Environment.NewLine;
-                    }
-                }
-                throw new Exception(_errorMessage, dbEx);
-            }
+            return dbSet.Find(id);
         }
-        public virtual void Update(T entity)
+
+        public virtual void Insert(TEntity entity)
         {
-            try
-            {
-                if (entity == null)
-                    throw new ArgumentNullException("entity");
-                if (Context == null || _isDisposed)
-                    Context = new EmployeeDBContext();
-                SetEntryModified(entity);
-                //Context.SaveChanges(); commented out call to SaveChanges as Context save changes will be called with Unit of work
-            }
-            catch (DbEntityValidationException dbEx)
-            {
-                foreach (var validationErrors in dbEx.EntityValidationErrors)
-                    foreach (var validationError in validationErrors.ValidationErrors)
-                        _errorMessage += Environment.NewLine + string.Format("Property: {0} Error: {1}", validationError.PropertyName, validationError.ErrorMessage);
-                throw new Exception(_errorMessage, dbEx);
-            }
+            dbSet.Add(entity);
         }
-        public virtual void Delete(T entity)
+
+        public virtual void Delete(object id)
         {
-            try
-            {
-                if (entity == null)
-                    throw new ArgumentNullException("entity");
-                if (Context == null || _isDisposed)
-                    Context = new EmployeeDBContext();
-                Entities.Remove(entity);
-                //Context.SaveChanges(); commented out call to SaveChanges as Context save changes will be called with Unit of work
-            }
-            catch (DbEntityValidationException dbEx)
-            {
-                foreach (var validationErrors in dbEx.EntityValidationErrors)
-                    foreach (var validationError in validationErrors.ValidationErrors)
-                        _errorMessage += Environment.NewLine + string.Format("Property: {0} Error: {1}", validationError.PropertyName, validationError.ErrorMessage);
-                throw new Exception(_errorMessage, dbEx);
-            }
+            TEntity entityToDelete = dbSet.Find(id);
+            Delete(entityToDelete);
         }
-        public virtual void SetEntryModified(T entity)
+
+        public virtual void Delete(TEntity entityToDelete)
         {
-            Context.Entry(entity).State = EntityState.Modified;
+            if (context.Entry(entityToDelete).State == EntityState.Detached)
+            {
+                dbSet.Attach(entityToDelete);
+            }
+            dbSet.Remove(entityToDelete);
         }
+
+        public virtual void Update(TEntity entityToUpdate)
+        {
+            dbSet.Attach(entityToUpdate);
+            context.Entry(entityToUpdate).State = EntityState.Modified;
+        }
+    }
 }
+
